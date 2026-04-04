@@ -6,7 +6,7 @@ import pandas as pd
 st.set_page_config(page_title="我的美股監控站", layout="wide")
 
 # 1. 建立連線 (請確保 url 正確且 Google 表單已開放「知道連結的人可檢視」)
-url = "你的Google表單網址"
+url = "https://docs.google.com/spreadsheets/d/1aVmTqnYP0GbWJNKUeH1ugQ8jqwrR7hk6O5RyzmP4U84/edit?gid=0#gid=0"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # 讀取現有資料並強制轉換類型，避免比較時報錯
