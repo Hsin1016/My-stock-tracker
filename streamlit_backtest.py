@@ -349,8 +349,8 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
     # 動態策略買賣標記
     if not trades_df.empty:
         dyn = trades_df[trades_df['策略'] == '動態買賣']
-        buy_t  = dyn[dyn['動作'] == '買回']
-        sell_t = dyn[dyn['動作'] != '買回']
+        buy_t  = dyn[dyn['動作'].str.contains('買回')]
+        sell_t = dyn[~dyn['動作'].str.contains('買回')]
 
         def get_price(df_t):
             prices = []
