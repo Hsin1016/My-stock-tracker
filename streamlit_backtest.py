@@ -146,6 +146,8 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
                        '賣出3(跌60%→20%)', '清倉(跌80%→30%)']
             trades.append({
                 '日期': date.strftime('%Y-%m-%d'),
+                '動作': label,
+                '日期': date.strftime('%Y-%m-%d'),
                 '動作': labels[sidx], '策略': '動態買賣',
                 '價格': round(ep, 4), '股數': round(s_sold, 4),
                 '金額': round(amt, 2), '現金餘額': round(cash, 2),
@@ -234,9 +236,7 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
             last_cross = cross
 
         result_st.append({'date': date, 'total': cash + shares * close})
-        # DEBUG
-        for t in trades:
-            print(t['日期'], t['動作'], f"現金:{t['現金餘額']:.2f}", f"持股:{t['持股市值']:.2f}")
+
     return (pd.DataFrame(result_bh), pd.DataFrame(result_st),
             pd.DataFrame(trades) if trades else pd.DataFrame(),
             entry_price, bt)
