@@ -226,6 +226,9 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         subplot_titles=[f"{ticker} 價格走勢", "副指標", "資產對比（三策略）"],
         vertical_spacing=0.06,
     )
+    # subplot title 字體
+    for ann in fig['layout']['annotations']:
+        ann['font'] = dict(size=12, color='#e9ecef')
 
     dates = bt_df['date']
 
@@ -329,9 +332,18 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         paper_bgcolor='#0a0e27',
         plot_bgcolor='#1a1f3a',
         font=dict(color='#e9ecef', size=11),
-        legend=dict(bgcolor='#1a1f3a', bordercolor='#2d3250', borderwidth=1,
-                    font=dict(size=10), orientation='h', y=1.02, x=0),
-        margin=dict(l=60, r=20, t=60, b=40),
+        legend=dict(
+            bgcolor='rgba(26,31,58,0.85)',
+            bordercolor='#2d3250',
+            borderwidth=1,
+            font=dict(size=9),
+            orientation='v',       # 垂直排列，避免手機橫向擠壓
+            x=1.01, y=1,           # 移到圖表右側外
+            xanchor='left',
+            yanchor='top',
+            itemwidth=30,
+        ),
+        margin=dict(l=50, r=130, t=50, b=40),  # 右邊留空給圖例
         xaxis_rangeslider_visible=False,
         hovermode='x unified',
     )
