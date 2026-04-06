@@ -234,7 +234,9 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
             last_cross = cross
 
         result_st.append({'date': date, 'total': cash + shares * close})
-
+        # DEBUG
+        for t in trades:
+            print(t['日期'], t['動作'], f"現金:{t['現金餘額']:.2f}", f"持股:{t['持股市值']:.2f}")
     return (pd.DataFrame(result_bh), pd.DataFrame(result_st),
             pd.DataFrame(trades) if trades else pd.DataFrame(),
             entry_price, bt)
