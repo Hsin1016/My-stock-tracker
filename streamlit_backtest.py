@@ -419,7 +419,8 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         fig.add_trace(go.Scatter(x=dates, y=bt_df['D'], name='D',
                                  line=dict(color='#ffd93d', width=1.2)), row=2, col=1)
         fig.add_trace(go.Scatter(x=dates, y=bt_df['J'], name='J',
-                                 line=dict(color='#6366f1', width=1, opacity=0.7)), row=2, col=1)
+                                 line=dict(color='#6366f1', width=1),
+                                 opacity=0.7), row=2, col=1)
     else:
         vol_colors = ['#51cf66' if i == 0 or float(bt_df['Close'].iloc[i]) >= float(bt_df['Close'].iloc[i-1])
                       else '#ff6b6b' for i in range(len(bt_df))]
