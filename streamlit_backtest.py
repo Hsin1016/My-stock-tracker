@@ -1,5 +1,4 @@
-# ══ 買回觸發判斷 ══
-        if cash > 0.01import streamlit as st
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -7,7 +6,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="股票回測分析", layout="wide", page_icon="📈")
-
 st.markdown("""
 <style>
     .main { background-color: #0a0e27; }
@@ -15,29 +13,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-TRIGGER_PCT = 0.20
-
 # ══════════════════════════════════════════════════════
 #  指標計算
 # ══════════════════════════════════════════════════════
 def calc_indicators(df, ma_short, ma_long):
     d = df.copy()
-    d['MA_S'] = d['Close'].rolling(ma_short).mean()
-    d['MA_L'] = d['Close'].rolling(ma_long).mean()
+    d['MA_S']   = d['Close'].rolling(ma_short).mean()
+    d['MA_L']   = d['Close'].rolling(ma_long).mean()
     d['BB_mid'] = d['Close'].rolling(20).mean()
-    std = d['Close'].rolling(20).std()
-    d['BB_up'] = d['BB_mid'] + 2 * std
-    d['BB_dn'] = d['BB_mid'] - 2 * std
-    delta = d['Close'].diff()
-    gain  = delta.clip(lower=0).rolling(14).mean()
-    loss  = (-delta.clip(upper=0)).rolling(14).mean()
-    d['RSI'] = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
-    low9  = d['Low'].rolling(9).min()
-    high9 = d['High'].rolling(9).max()
-    rsv   = (d['Close'] - low9) / (high9 - low9 + 1e-9) * 100
-    d['K'] = rsv.ewm(com=2, adjust=False).mean()
-    d['D'] = d['K'].ewm(com=2, adjust=False).mean()
-    d['J'] = 3 * d['K'] - 2 * d['D']
+    std         = d['Close'].rolling(20).std()
+    d['BB_up']  = d['BB_mid'] + 2 * std
+    d['BB_dn']  = d['BB_mid'] - 2 * std
+    delta       = d['Close'].diff()
+    gain        = delta.clip(lower=0).rolling(14).mean()
+    loss        = (-delta.clip(upper=0)).rolling(14).mean()
+    d['RSI']    = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
+    low9        = d['Low'].rolling(9).min()
+    high9       = d['High'].rolling(9).max()
+    rsv         = (d['Close'] - low9) / (high9 - low9 + 1e-9) * 100
+    d['K']      = rsv.ewm(com=2, adjust=False).mean()
+    d['D']      = d['K'].ewm(com=2, adjust=False).mean()
+    d['J']      = 3 * d['K'] - 2 * d['D']
     d['Vol_MA'] = d['Volume'].rolling(20).mean()
     return d
 
@@ -53,8 +49,8 @@ def calc_signals(df, cfg):
             pms, pml = df['MA_S'].iloc[i-1], df['MA_L'].iloc[i-1]
             cms, cml = df['MA_S'].iloc[i],   df['MA_L'].iloc[i]
             if all(pd.notna(x) for x in [pms, pml, cms, cml]):
-                if pms < pml and cms >= cml: mb.iloc[i] = True
-                elif pms > pml and cms <= cml: ms.iloc[i] = True
+                if float(pms) < float(pml) and float(cms) >= float(cml): mb.iloc[i] = True
+                elif float(pms) > float(pml) and float(cms) <= float(cml): ms.iloc[i] = True
         buy_parts.append(mb); sell_parts.append(ms)
 
     if cfg['bb']:
@@ -81,13 +77,11 @@ def calc_signals(df, cfg):
         return pd.Series(False, index=df.index), pd.Series(False, index=df.index)
 
     if cfg['logic'] == 'AND':
-        buy_sig  = buy_parts[0].copy()
-        sell_sig = sell_parts[0].copy()
+        buy_sig = buy_parts[0].copy(); sell_sig = sell_parts[0].copy()
         for b, s in zip(buy_parts[1:], sell_parts[1:]):
             buy_sig &= b; sell_sig &= s
     else:
-        buy_sig  = buy_parts[0].copy()
-        sell_sig = sell_parts[0].copy()
+        buy_sig = buy_parts[0].copy(); sell_sig = sell_parts[0].copy()
         for b, s in zip(buy_parts[1:], sell_parts[1:]):
             buy_sig |= b; sell_sig |= s
 
@@ -103,9 +97,8 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
     bt.rename(columns={'Date': 'date'}, inplace=True)
     bt = bt.reset_index(drop=True)
     if bt.empty:
-        return None, None, None, None, None, None
+        return None, None, None, None, None
 
-    buy_sig, sell_sig = calc_signals(bt, cfg)
     entry_price = float(bt.loc[0, 'Close'])
 
     # ── 策略一：買入持有 ──
@@ -117,18 +110,15 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
     cash   = 0.0
     shares = initial_cash / entry_price
 
-    # 峰值追蹤（永不重置）
-    peak_price      = entry_price          # 歷史最高股價
-    peak_total      = initial_cash         # 峰值時的總資產
-    sell_triggered  = [False]*4            # 4個賣出觸發點是否已觸發
-    # 賣出比例：20%、30%、20%、30%（對應跌幅 死叉、40%、60%、80%）
-    sell_ratios     = [0.20, 0.30, 0.20, 0.30]
-    sell_thresholds = [None, 0.40, 0.60, 0.80]  # None=死叉觸發，其餘為跌幅
+    peak_price     = entry_price
+    peak_total     = initial_cash
+    sell_triggered = [False] * 4
+    sell_ratios    = [0.20, 0.30, 0.20, 0.30]
+    sell_drop_pct  = [None, 0.40, 0.60, 0.80]  # None = 死叉觸發
 
-    # 買回追蹤
-    last_buy_price  = None   # 上次買回的執行價
-    last_cross      = None
-    buy_triggered_after_cross = False  # 金叉後是否已觸發第一次買回
+    last_cross                = None
+    buy_triggered_after_cross = False
+    last_buy_price            = None
 
     trades    = []
     result_st = []
@@ -140,34 +130,30 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
         close = float(row['Close'])
         open_ = float(row['Open']) if pd.notna(row.get('Open')) else close
         pend  = bt.loc[i, 'pending']
+        pdata = bt.loc[i, 'pending_data']
 
         # ── 執行掛單（隔日開盤）──
-        if pend == 'sell' and shares > 0:
-            ep        = open_
-            pdata     = bt.loc[i, 'pending_data']
-            sell_idx  = pdata['sell_idx']
-            ratio     = sell_ratios[sell_idx]
-            # 以峰值總資產計算應賣出股數
-            s_sold    = (peak_total * ratio) / ep
-            s_sold    = min(s_sold, shares)  # 不超過持有股數
-            amt       = s_sold * ep
-            cash     += amt
-            shares   -= s_sold
-            if shares < 0.0001:
-                shares = 0.0
-            label = f'賣出{sell_idx+1} (峰值{int(ratio*100)}%)'
-            if sell_idx == 3:
-                label = '清倉 (峰值80%)'
+        if pend == 'sell' and shares > 0 and isinstance(pdata, dict):
+            ep       = open_
+            sidx     = pdata['sell_idx']
+            ratio    = sell_ratios[sidx]
+            s_sold   = min((peak_total * ratio) / ep, shares)
+            amt      = s_sold * ep
+            cash    += amt
+            shares  -= s_sold
+            if shares < 0.0001: shares = 0.0
+            labels  = ['賣出1(死叉20%)', '賣出2(跌40%→30%)',
+                       '賣出3(跌60%→20%)', '清倉(跌80%→30%)']
             trades.append({
                 '日期': date.strftime('%Y-%m-%d'),
-                '動作': label, '策略': '動態買賣',
+                '動作': labels[sidx], '策略': '動態買賣',
                 '價格': round(ep, 4), '股數': round(s_sold, 4),
                 '金額': round(amt, 2), '現金餘額': round(cash, 2),
                 '持股市值': round(shares * ep, 2),
                 '總資產': round(cash + shares * ep, 2),
             })
 
-        elif pend == 'buy' and cash > 0:
+        elif pend == 'buy' and cash > 0.01:
             ep      = open_
             buy_amt = cash * 0.20
             buy_sh  = buy_amt / ep
@@ -183,13 +169,12 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
                 '總資產': round(cash + shares * ep, 2),
             })
 
-        # ── 更新峰值（股價創新高時更新）──
+        # ── 更新峰值 ──
         total_now = cash + shares * close
         if close > peak_price:
-            peak_price = close
-            peak_total = total_now
-            # 新高時重置賣出觸發點（進入新一輪保護）
-            sell_triggered = [False]*4
+            peak_price     = close
+            peak_total     = total_now
+            sell_triggered = [False] * 4  # 新高重置觸發點
 
         # ── 判斷 MA 交叉 ──
         cross = None
@@ -198,59 +183,49 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
             cms = bt.loc[i,   'MA_S']; cml = bt.loc[i,   'MA_L']
             if all(pd.notna(x) for x in [pms, pml, cms, cml]):
                 pms,pml,cms,cml = float(pms),float(pml),float(cms),float(cml)
-                if pms < pml and cms >= cml:
-                    cross = 'golden'
-                elif pms > pml and cms <= cml:
-                    cross = 'death'
+                if pms < pml and cms >= cml:   cross = 'golden'
+                elif pms > pml and cms <= cml: cross = 'death'
 
-        # ══ 賣出觸發判斷 ══
+        # ══ 賣出觸發 ══
         if shares > 0 and i + 1 < len(bt):
-
-            # 第1次：死叉觸發
-            if (not sell_triggered[0] and
-                    cross == 'death' and cross != last_cross):
+            # 第1次：死叉
+            if not sell_triggered[0] and cross == 'death' and cross != last_cross:
                 sell_triggered[0] = True
                 bt.at[i+1, 'pending']      = 'sell'
                 bt.at[i+1, 'pending_data'] = {'sell_idx': 0}
-
             # 第2次：跌到峰值 40%
-            elif (not sell_triggered[1] and sell_triggered[0] and
+            if (sell_triggered[0] and not sell_triggered[1] and
                     close <= peak_price * (1 - 0.40)):
                 sell_triggered[1] = True
                 bt.at[i+1, 'pending']      = 'sell'
                 bt.at[i+1, 'pending_data'] = {'sell_idx': 1}
-
             # 第3次：跌到峰值 60%
-            elif (not sell_triggered[2] and sell_triggered[1] and
+            if (sell_triggered[1] and not sell_triggered[2] and
                     close <= peak_price * (1 - 0.60)):
                 sell_triggered[2] = True
                 bt.at[i+1, 'pending']      = 'sell'
                 bt.at[i+1, 'pending_data'] = {'sell_idx': 2}
-
             # 第4次：跌到峰值 80%（清倉）
-            elif (not sell_triggered[3] and sell_triggered[2] and
+            if (sell_triggered[2] and not sell_triggered[3] and
                     close <= peak_price * (1 - 0.80)):
                 sell_triggered[3] = True
                 bt.at[i+1, 'pending']      = 'sell'
                 bt.at[i+1, 'pending_data'] = {'sell_idx': 3}
 
-        # ══ 買回觸發判斷 ══
+        # ══ 買回觸發 ══
         if cash > 0.01 and i + 1 < len(bt):
-
-            # 金叉 → 第一次買回 20%
-            if (cross == 'golden' and cross != last_cross and
-                    not buy_triggered_after_cross):
+            # 金叉 → 第一次買回
+            if cross == 'golden' and cross != last_cross and not buy_triggered_after_cross:
                 buy_triggered_after_cross = True
                 last_buy_price = close
                 bt.at[i+1, 'pending'] = 'buy'
-
-            # 後續每漲 20% 再買回 20%
+            # 後續每漲 20% 再買回
             elif (buy_triggered_after_cross and last_buy_price is not None and
-                    close >= last_buy_price * 1.20):
+                  close >= last_buy_price * 1.20):
                 last_buy_price = close
                 bt.at[i+1, 'pending'] = 'buy'
 
-        # 死叉後重置買回狀態
+        # 死叉重置買回狀態
         if cross == 'death':
             buy_triggered_after_cross = False
             last_buy_price = None
@@ -269,45 +244,25 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
 #  定期定額回測
 # ══════════════════════════════════════════════════════
 def run_dca(bt_df, dca_amount, dca_days):
-    """
-    bt_df   : 已含指標的回測 DataFrame（含 date, Close 欄）
-    dca_amount : 每次投入金額
-    dca_days   : 每月買入日，如 [5, 15, 25]
-    回傳 result_dca (每日總資產), dca_trades (交易記錄)
-    """
-    shares    = 0.0
-    total_invested = 0.0
-    dca_trades = []
-    result_dca = []
-
+    shares = 0.0; total_invested = 0.0
+    dca_trades = []; result_dca = []
     for _, row in bt_df.iterrows():
         date  = row['date']
         close = float(row['Close'])
-        day   = pd.to_datetime(date).day
-
-        # 找最接近目標日的交易日（當月第一個 >= 目標日的交易日）
-        if day in dca_days:
+        if pd.to_datetime(date).day in dca_days:
             buy_sh = dca_amount / close
-            shares += buy_sh
-            total_invested += dca_amount
+            shares += buy_sh; total_invested += dca_amount
             dca_trades.append({
                 '日期': pd.to_datetime(date).strftime('%Y-%m-%d'),
-                '動作': '定期買入',
-                '策略': '定期定額',
-                '價格': round(close, 4),
-                '股數': round(buy_sh, 4),
+                '動作': '定期買入', '策略': '定期定額',
+                '價格': round(close, 4), '股數': round(buy_sh, 4),
                 '金額': round(dca_amount, 2),
                 '累計投入': round(total_invested, 2),
                 '持股市值': round(shares * close, 2),
                 '總資產': round(shares * close, 2),
             })
-
-        result_dca.append({
-            'date':  date,
-            'total': shares * close,
-            'invested': total_invested,
-        })
-
+        result_dca.append({'date': date, 'total': shares * close,
+                           'invested': total_invested})
     return pd.DataFrame(result_dca), pd.DataFrame(dca_trades), total_invested
 
 
@@ -323,16 +278,14 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         subplot_titles=[f"{company_name} ({ticker}) 價格走勢", "副指標", "資產對比（三策略）"],
         vertical_spacing=0.06,
     )
-    # subplot title 字體
     for ann in fig['layout']['annotations']:
         ann['font'] = dict(size=12, color='#e9ecef')
 
     dates = bt_df['date']
 
-    # ── 上圖：收盤價折線 + MA + BB ──
+    # ── 上圖：收盤價 + MA + BB ──
     fig.add_trace(go.Scatter(x=dates, y=bt_df['Close'], name='收盤價',
                              line=dict(color='#00d4aa', width=1.5)), row=1, col=1)
-
     fig.add_trace(go.Scatter(x=dates, y=bt_df['MA_S'], name=f'MA{ma_short}',
                              line=dict(color='#ff6b6b', width=1.2, dash='dash')), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=bt_df['MA_L'], name=f'MA{ma_long}',
@@ -349,7 +302,7 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
 
     # 動態策略買賣標記
     if not trades_df.empty:
-        dyn = trades_df[trades_df['策略'] == '動態買賣']
+        dyn    = trades_df[trades_df['策略'] == '動態買賣']
         buy_t  = dyn[dyn['動作'].str.contains('買回')]
         sell_t = dyn[~dyn['動作'].str.contains('買回')]
 
@@ -363,14 +316,14 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         if not buy_t.empty:
             fig.add_trace(go.Scatter(
                 x=pd.to_datetime(buy_t['日期']), y=get_price(buy_t),
-                mode='markers', name='動態買回',
-                marker=dict(symbol='triangle-up', size=11, color='#51cf66'),
+                mode='markers', name='動態買入',
+                marker=dict(symbol='triangle-up', size=12, color='#51cf66'),
             ), row=1, col=1)
         if not sell_t.empty:
             fig.add_trace(go.Scatter(
                 x=pd.to_datetime(sell_t['日期']), y=get_price(sell_t),
                 mode='markers', name='動態賣出',
-                marker=dict(symbol='triangle-down', size=11, color='#ff6b6b'),
+                marker=dict(symbol='triangle-down', size=12, color='#ff6b6b'),
             ), row=1, col=1)
 
     # 定期定額買入標記
@@ -413,10 +366,8 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
                              line=dict(color='#6366f1', width=2)), row=3, col=1)
     fig.add_trace(go.Scatter(x=dca_df['date'], y=dca_df['total'], name='定期定額',
                              line=dict(color='#ffd93d', width=2)), row=3, col=1)
-    # 定期定額累計投入線（虛線）
     fig.add_trace(go.Scatter(x=dca_df['date'], y=dca_df['invested'], name='定額累計投入',
-                             line=dict(color='#ffd93d', width=1, dash='dot'),
-                             opacity=0.5), row=3, col=1)
+                             line=dict(color='#ffd93d', width=1, dash='dot'), opacity=0.5), row=3, col=1)
     fig.add_hline(y=bh_df['total'].iloc[0], line_color='#adb5bd',
                   line_dash='dot', line_width=1, row=3, col=1)
 
@@ -427,15 +378,11 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         font=dict(color='#e9ecef', size=11),
         legend=dict(
             bgcolor='rgba(26,31,58,0.92)',
-            bordercolor='#00d4aa',
-            borderwidth=1,
+            bordercolor='#00d4aa', borderwidth=1,
             font=dict(size=11, color='#e9ecef'),
             orientation='v',
-            x=1.01, y=1,
-            xanchor='left',
-            yanchor='top',
-            itemwidth=40,
-            tracegroupgap=4,
+            x=1.01, y=1, xanchor='left', yanchor='top',
+            itemwidth=40, tracegroupgap=4,
             title=dict(text='圖例 (可點選)', font=dict(size=11, color='#00d4aa')),
         ),
         margin=dict(l=50, r=160, t=50, b=40),
@@ -446,7 +393,6 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         fig.update_xaxes(gridcolor='#2d3250', gridwidth=0.5, showgrid=True, row=i, col=1)
         fig.update_yaxes(gridcolor='#2d3250', gridwidth=0.5, showgrid=True, row=i, col=1)
     fig.update_yaxes(tickprefix='$', row=3, col=1)
-
     return fig
 
 
@@ -502,7 +448,6 @@ with st.sidebar:
 
 # ── 主畫面 ──
 if run_btn:
-    # 驗證
     if ma_short >= ma_long:
         st.error("❌ 短期MA必須小於長期MA"); st.stop()
     if not any([cb_ma, cb_bb, cb_rsi, cb_kdj, cb_vol]):
@@ -522,7 +467,6 @@ if run_btn:
             raw   = yf.download(ticker, start=start, auto_adjust=True, progress=False)
             raw.index = pd.to_datetime(raw.index)
             raw.columns = raw.columns.get_level_values(0)
-            # 抓公司名稱
             try:
                 info = yf.Ticker(ticker).info
                 company_name = info.get('longName') or info.get('shortName') or ticker
@@ -539,16 +483,14 @@ if run_btn:
         st.error("❌ 回測區間內無資料，請確認日期設定"); st.stop()
 
     # 定期定額
-    dca_df = pd.DataFrame(st_df[['date']].copy())  # 空的預設
-    dca_trades_df  = pd.DataFrame()
-    dca_invested   = 0.0
-    final_dca      = 0.0
+    dca_df = pd.DataFrame({'date': st_df['date'], 'total': [0]*len(st_df), 'invested': [0]*len(st_df)})
+    dca_trades_df = pd.DataFrame()
+    dca_invested  = 0.0
+    final_dca     = 0.0
 
     if dca_on and dca_days:
         dca_df, dca_trades_df, dca_invested = run_dca(bt_df, dca_amount, dca_days)
         final_dca = float(dca_df.iloc[-1]['total'])
-    else:
-        dca_df = pd.DataFrame({'date': st_df['date'], 'total': [0]*len(st_df), 'invested': [0]*len(st_df)})
 
     final_bh = bh_df.iloc[-1]['total']
     final_st = st_df.iloc[-1]['total']
@@ -557,6 +499,7 @@ if run_btn:
     ret_dca  = (final_dca - dca_invested) / dca_invested * 100 if dca_invested > 0 else 0
     n_trades = len(trades_df) if not trades_df.empty else 0
     n_dca    = len(dca_trades_df) if not dca_trades_df.empty else 0
+    days_str = "+".join([f"{d}日" for d in dca_days]) if dca_days else "—"
 
     # ── 公司名稱標題 ──
     st.markdown(f"### 🏢 {company_name}　`{ticker}`")
@@ -565,13 +508,12 @@ if run_btn:
     # ── 摘要卡片 ──
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        st.metric("進場價格", f"${entry_price:.4f}", f"{ticker}")
+        st.metric("進場價格", f"${entry_price:.4f}", ticker)
     with c2:
         st.metric("策略一 買入持有", f"${final_bh:,.2f}", f"{ret_bh:+.2f}%")
     with c3:
         st.metric("策略二 動態買賣", f"${final_st:,.2f}", f"{ret_st:+.2f}%")
     with c4:
-        days_str = "+".join([f"{d}日" for d in dca_days]) if dca_days else "—"
         st.metric("策略三 定期定額", f"${final_dca:,.2f}",
                   f"{ret_dca:+.2f}%  |  投入${dca_invested:,.0f}")
     with c5:
@@ -581,9 +523,11 @@ if run_btn:
 
     st.divider()
 
-    # ── 圖表 + 交易記錄 ──
-    tab1, tab2, tab3 = st.tabs(["📊 走勢圖", f"📋 動態策略記錄（{n_trades}筆）",
-                                  f"💰 定期定額記錄（{n_dca}筆）"])
+    tab1, tab2, tab3 = st.tabs([
+        "📊 走勢圖",
+        f"📋 動態策略記錄（{n_trades}筆）",
+        f"💰 定期定額記錄（{n_dca}筆）",
+    ])
 
     with tab1:
         fig = build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
@@ -607,12 +551,10 @@ if run_btn:
             st.dataframe(dca_trades_df.style.apply(
                 lambda _: ['color: #ffd93d'] * len(dca_trades_df.columns), axis=1),
                 use_container_width=True, hide_index=True)
-
-            # 定期定額統計小結
             sc1, sc2, sc3 = st.columns(3)
-            sc1.metric("總投入", f"${dca_invested:,.2f}")
-            sc2.metric("現值",   f"${final_dca:,.2f}")
-            sc3.metric("報酬率", f"{ret_dca:+.2f}%",
+            sc1.metric("總投入",  f"${dca_invested:,.2f}")
+            sc2.metric("現值",    f"${final_dca:,.2f}")
+            sc3.metric("報酬率",  f"{ret_dca:+.2f}%",
                        f"每月{days_str}各投入${dca_amount:,.0f}")
 
 else:
