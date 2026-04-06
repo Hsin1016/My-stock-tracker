@@ -1,4 +1,5 @@
-import streamlit as st
+# ══ 買回觸發判斷 ══
+        if cash > 0.01import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
