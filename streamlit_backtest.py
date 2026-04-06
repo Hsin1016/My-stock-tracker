@@ -113,10 +113,26 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
                  for _, r in bt.iterrows()]
 
     # ── 策略二：動態買賣 ──
-    cash = 0.0; shares = initial_cash / entry_price
-    sell_count = 0; last_buy = False; last_sell = False
-    trades = []; result_st = []
-    bt['pending'] = None
+    cash   = 0.0
+    shares = initial_cash / entry_price
+
+    # 峰值追蹤（永不重置）
+    peak_price      = entry_price          # 歷史最高股價
+    peak_total      = initial_cash         # 峰值時的總資產
+    sell_triggered  = [False]*4            # 4個賣出觸發點是否已觸發
+    # 賣出比例：20%、30%、20%、30%（對應跌幅 死叉、40%、60%、80%）
+    sell_ratios     = [0.20, 0.30, 0.20, 0.30]
+    sell_thresholds = [None, 0.40, 0.60, 0.80]  # None=死叉觸發，其餘為跌幅
+
+    # 買回追蹤
+    last_buy_price  = None   # 上次買回的執行價
+    last_cross      = None
+    buy_triggered_after_cross = False  # 金叉後是否已觸發第一次買回
+
+    trades    = []
+    result_st = []
+    bt['pending']      = None
+    bt['pending_data'] = np.empty(len(bt), dtype=object)
 
     for i, row in bt.iterrows():
         date  = row['date']
@@ -124,42 +140,122 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
         open_ = float(row['Open']) if pd.notna(row.get('Open')) else close
         pend  = bt.loc[i, 'pending']
 
+        # ── 執行掛單（隔日開盤）──
         if pend == 'sell' and shares > 0:
-            ep = open_
-            if sell_count >= 2:
-                s_sold = shares; amt = s_sold * ep
-                cash += amt; shares = 0.0
-                label = '清倉 (第3次)'; sell_count = 3
-            else:
-                s_sold = shares * TRIGGER_PCT; amt = s_sold * ep
-                cash += amt; shares -= s_sold; sell_count += 1
-                label = f'賣出{sell_count}'
-            trades.append({'日期': date.strftime('%Y-%m-%d'), '動作': label,
-                           '策略': '動態買賣',
-                           '價格': round(ep, 4), '股數': round(s_sold, 4),
-                           '金額': round(amt, 2), '現金餘額': round(cash, 2),
-                           '持股市值': round(shares * ep, 2),
-                           '總資產': round(cash + shares * ep, 2)})
+            ep        = open_
+            pdata     = bt.loc[i, 'pending_data']
+            sell_idx  = pdata['sell_idx']
+            ratio     = sell_ratios[sell_idx]
+            # 以峰值總資產計算應賣出股數
+            s_sold    = (peak_total * ratio) / ep
+            s_sold    = min(s_sold, shares)  # 不超過持有股數
+            amt       = s_sold * ep
+            cash     += amt
+            shares   -= s_sold
+            if shares < 0.0001:
+                shares = 0.0
+            label = f'賣出{sell_idx+1} (峰值{int(ratio*100)}%)'
+            if sell_idx == 3:
+                label = '清倉 (峰值80%)'
+            trades.append({
+                '日期': date.strftime('%Y-%m-%d'),
+                '動作': label, '策略': '動態買賣',
+                '價格': round(ep, 4), '股數': round(s_sold, 4),
+                '金額': round(amt, 2), '現金餘額': round(cash, 2),
+                '持股市值': round(shares * ep, 2),
+                '總資產': round(cash + shares * ep, 2),
+            })
 
         elif pend == 'buy' and cash > 0:
-            ep = open_
-            buy_amt = cash * TRIGGER_PCT; buy_sh = buy_amt / ep
-            cash -= buy_amt; shares += buy_sh
-            sell_count = max(0, sell_count - 1)
-            trades.append({'日期': date.strftime('%Y-%m-%d'), '動作': '買回',
-                           '策略': '動態買賣',
-                           '價格': round(ep, 4), '股數': round(buy_sh, 4),
-                           '金額': round(buy_amt, 2), '現金餘額': round(cash, 2),
-                           '持股市值': round(shares * ep, 2),
-                           '總資產': round(cash + shares * ep, 2)})
+            ep      = open_
+            buy_amt = cash * 0.20
+            buy_sh  = buy_amt / ep
+            cash   -= buy_amt
+            shares += buy_sh
+            last_buy_price = ep
+            trades.append({
+                '日期': date.strftime('%Y-%m-%d'),
+                '動作': '買回20%', '策略': '動態買賣',
+                '價格': round(ep, 4), '股數': round(buy_sh, 4),
+                '金額': round(buy_amt, 2), '現金餘額': round(cash, 2),
+                '持股市值': round(shares * ep, 2),
+                '總資產': round(cash + shares * ep, 2),
+            })
 
-        is_sell = bool(sell_sig.iloc[i])
-        is_buy  = bool(buy_sig.iloc[i])
-        if is_sell and not last_sell and shares > 0 and i + 1 < len(bt):
-            bt.at[i + 1, 'pending'] = 'sell'
-        elif is_buy and not last_buy and cash > 0 and i + 1 < len(bt):
-            bt.at[i + 1, 'pending'] = 'buy'
-        last_sell = is_sell; last_buy = is_buy
+        # ── 更新峰值（股價創新高時更新）──
+        total_now = cash + shares * close
+        if close > peak_price:
+            peak_price = close
+            peak_total = total_now
+            # 新高時重置賣出觸發點（進入新一輪保護）
+            sell_triggered = [False]*4
+
+        # ── 判斷 MA 交叉 ──
+        cross = None
+        if i > 0:
+            pms = bt.loc[i-1, 'MA_S']; pml = bt.loc[i-1, 'MA_L']
+            cms = bt.loc[i,   'MA_S']; cml = bt.loc[i,   'MA_L']
+            if all(pd.notna(x) for x in [pms, pml, cms, cml]):
+                pms,pml,cms,cml = float(pms),float(pml),float(cms),float(cml)
+                if pms < pml and cms >= cml:
+                    cross = 'golden'
+                elif pms > pml and cms <= cml:
+                    cross = 'death'
+
+        # ══ 賣出觸發判斷 ══
+        if shares > 0 and i + 1 < len(bt):
+
+            # 第1次：死叉觸發
+            if (not sell_triggered[0] and
+                    cross == 'death' and cross != last_cross):
+                sell_triggered[0] = True
+                bt.at[i+1, 'pending']      = 'sell'
+                bt.at[i+1, 'pending_data'] = {'sell_idx': 0}
+
+            # 第2次：跌到峰值 40%
+            elif (not sell_triggered[1] and sell_triggered[0] and
+                    close <= peak_price * (1 - 0.40)):
+                sell_triggered[1] = True
+                bt.at[i+1, 'pending']      = 'sell'
+                bt.at[i+1, 'pending_data'] = {'sell_idx': 1}
+
+            # 第3次：跌到峰值 60%
+            elif (not sell_triggered[2] and sell_triggered[1] and
+                    close <= peak_price * (1 - 0.60)):
+                sell_triggered[2] = True
+                bt.at[i+1, 'pending']      = 'sell'
+                bt.at[i+1, 'pending_data'] = {'sell_idx': 2}
+
+            # 第4次：跌到峰值 80%（清倉）
+            elif (not sell_triggered[3] and sell_triggered[2] and
+                    close <= peak_price * (1 - 0.80)):
+                sell_triggered[3] = True
+                bt.at[i+1, 'pending']      = 'sell'
+                bt.at[i+1, 'pending_data'] = {'sell_idx': 3}
+
+        # ══ 買回觸發判斷 ══
+        if cash > 0.01 and i + 1 < len(bt):
+
+            # 金叉 → 第一次買回 20%
+            if (cross == 'golden' and cross != last_cross and
+                    not buy_triggered_after_cross):
+                buy_triggered_after_cross = True
+                last_buy_price = close
+                bt.at[i+1, 'pending'] = 'buy'
+
+            # 後續每漲 20% 再買回 20%
+            elif (buy_triggered_after_cross and last_buy_price is not None and
+                    close >= last_buy_price * 1.20):
+                last_buy_price = close
+                bt.at[i+1, 'pending'] = 'buy'
+
+        # 死叉後重置買回狀態
+        if cross == 'death':
+            buy_triggered_after_cross = False
+            last_buy_price = None
+
+        if cross:
+            last_cross = cross
 
         result_st.append({'date': date, 'total': cash + shares * close})
 
