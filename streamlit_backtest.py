@@ -232,13 +232,9 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
 
     dates = bt_df['date']
 
-    # ── 上圖：K線 + MA + BB ──
-    fig.add_trace(go.Candlestick(
-        x=dates, open=bt_df['Open'], high=bt_df['High'],
-        low=bt_df['Low'], close=bt_df['Close'], name='K線',
-        increasing_line_color='#51cf66', decreasing_line_color='#ff6b6b',
-        increasing_fillcolor='#51cf66', decreasing_fillcolor='#ff6b6b',
-    ), row=1, col=1)
+    # ── 上圖：收盤價折線 + MA + BB ──
+    fig.add_trace(go.Scatter(x=dates, y=bt_df['Close'], name='收盤價',
+                             line=dict(color='#00d4aa', width=1.5)), row=1, col=1)
 
     fig.add_trace(go.Scatter(x=dates, y=bt_df['MA_S'], name=f'MA{ma_short}',
                              line=dict(color='#ff6b6b', width=1.2, dash='dash')), row=1, col=1)
@@ -333,17 +329,19 @@ def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
         plot_bgcolor='#1a1f3a',
         font=dict(color='#e9ecef', size=11),
         legend=dict(
-            bgcolor='rgba(26,31,58,0.85)',
-            bordercolor='#2d3250',
+            bgcolor='rgba(26,31,58,0.92)',
+            bordercolor='#00d4aa',
             borderwidth=1,
-            font=dict(size=9),
-            orientation='v',       # 垂直排列，避免手機橫向擠壓
-            x=1.01, y=1,           # 移到圖表右側外
+            font=dict(size=11, color='#e9ecef'),
+            orientation='v',
+            x=1.01, y=1,
             xanchor='left',
             yanchor='top',
-            itemwidth=30,
+            itemwidth=40,
+            tracegroupgap=4,
+            title=dict(text='圖例 (可點選)', font=dict(size=11, color='#00d4aa')),
         ),
-        margin=dict(l=50, r=130, t=50, b=40),  # 右邊留空給圖例
+        margin=dict(l=50, r=160, t=50, b=40),
         xaxis_rangeslider_visible=False,
         hovermode='x unified',
     )
