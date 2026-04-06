@@ -218,12 +218,12 @@ def run_dca(bt_df, dca_amount, dca_days):
 #  Plotly 圖表
 # ══════════════════════════════════════════════════════
 def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
-                bt_df, ticker, ma_short, ma_long, cfg):
+                bt_df, ticker, company_name, ma_short, ma_long, cfg):
 
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True,
         row_heights=[0.48, 0.22, 0.30],
-        subplot_titles=[f"{ticker} 價格走勢", "副指標", "資產對比（三策略）"],
+        subplot_titles=[f"{company_name} ({ticker}) 價格走勢", "副指標", "資產對比（三策略）"],
         vertical_spacing=0.06,
     )
     # subplot title 字體
@@ -425,6 +425,12 @@ if run_btn:
             raw   = yf.download(ticker, start=start, auto_adjust=True, progress=False)
             raw.index = pd.to_datetime(raw.index)
             raw.columns = raw.columns.get_level_values(0)
+            # 抓公司名稱
+            try:
+                info = yf.Ticker(ticker).info
+                company_name = info.get('longName') or info.get('shortName') or ticker
+            except Exception:
+                company_name = ticker
         except Exception as e:
             st.error(f"❌ 下載失敗：{e}"); st.stop()
 
@@ -455,6 +461,10 @@ if run_btn:
     n_trades = len(trades_df) if not trades_df.empty else 0
     n_dca    = len(dca_trades_df) if not dca_trades_df.empty else 0
 
+    # ── 公司名稱標題 ──
+    st.markdown(f"### 🏢 {company_name}　`{ticker}`")
+    st.divider()
+
     # ── 摘要卡片 ──
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
@@ -480,7 +490,7 @@ if run_btn:
 
     with tab1:
         fig = build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
-                          bt_df, ticker, ma_short, ma_long, cfg)
+                          bt_df, ticker, company_name, ma_short, ma_long, cfg)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
