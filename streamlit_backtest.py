@@ -7,24 +7,10 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="股票回測分析", layout="wide", page_icon="📈")
 
-# ── 樣式 ──────────────────────────────────────────────
 st.markdown("""
 <style>
     .main { background-color: #0a0e27; }
     .block-container { padding-top: 1.5rem; }
-    .metric-card {
-        background: #1a1f3a;
-        border: 1px solid #2d3250;
-        border-radius: 12px;
-        padding: 16px 20px;
-        text-align: center;
-    }
-    .metric-title { color: #adb5bd; font-size: 13px; margin-bottom: 4px; }
-    .metric-value { font-size: 26px; font-weight: bold; }
-    .metric-sub   { color: #adb5bd; font-size: 12px; margin-top: 4px; }
-    .positive { color: #51cf66; }
-    .negative { color: #ff6b6b; }
-    .neutral  { color: #e9ecef; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -60,7 +46,8 @@ def calc_signals(df, cfg):
     buy_parts, sell_parts = [], []
 
     if cfg['ma']:
-        mb, ms = pd.Series(False, index=df.index), pd.Series(False, index=df.index)
+        mb = pd.Series(False, index=df.index)
+        ms = pd.Series(False, index=df.index)
         for i in range(1, n):
             pms, pml = df['MA_S'].iloc[i-1], df['MA_L'].iloc[i-1]
             cms, cml = df['MA_S'].iloc[i],   df['MA_L'].iloc[i]
@@ -115,14 +102,17 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
     bt.rename(columns={'Date': 'date'}, inplace=True)
     bt = bt.reset_index(drop=True)
     if bt.empty:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     buy_sig, sell_sig = calc_signals(bt, cfg)
     entry_price = float(bt.loc[0, 'Close'])
-    shares_bh   = initial_cash / entry_price
-    result_bh   = [{'date': r['date'], 'total': shares_bh * float(r['Close'])}
-                   for _, r in bt.iterrows()]
 
+    # ── 策略一：買入持有 ──
+    shares_bh = initial_cash / entry_price
+    result_bh = [{'date': r['date'], 'total': shares_bh * float(r['Close'])}
+                 for _, r in bt.iterrows()]
+
+    # ── 策略二：動態買賣 ──
     cash = 0.0; shares = initial_cash / entry_price
     sell_count = 0; last_buy = False; last_sell = False
     trades = []; result_st = []
@@ -145,6 +135,7 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
                 cash += amt; shares -= s_sold; sell_count += 1
                 label = f'賣出{sell_count}'
             trades.append({'日期': date.strftime('%Y-%m-%d'), '動作': label,
+                           '策略': '動態買賣',
                            '價格': round(ep, 4), '股數': round(s_sold, 4),
                            '金額': round(amt, 2), '現金餘額': round(cash, 2),
                            '持股市值': round(shares * ep, 2),
@@ -156,6 +147,7 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
             cash -= buy_amt; shares += buy_sh
             sell_count = max(0, sell_count - 1)
             trades.append({'日期': date.strftime('%Y-%m-%d'), '動作': '買回',
+                           '策略': '動態買賣',
                            '價格': round(ep, 4), '股數': round(buy_sh, 4),
                            '金額': round(buy_amt, 2), '現金餘額': round(cash, 2),
                            '持股市值': round(shares * ep, 2),
@@ -169,8 +161,7 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
             bt.at[i + 1, 'pending'] = 'buy'
         last_sell = is_sell; last_buy = is_buy
 
-        result_st.append({'date': date, 'total': cash + shares * close,
-                          'cash': cash, 'shares': shares})
+        result_st.append({'date': date, 'total': cash + shares * close})
 
     return (pd.DataFrame(result_bh), pd.DataFrame(result_st),
             pd.DataFrame(trades) if trades else pd.DataFrame(),
@@ -178,25 +169,70 @@ def run_backtest(df, backtest_start, initial_cash, ma_short, ma_long, cfg):
 
 
 # ══════════════════════════════════════════════════════
+#  定期定額回測
+# ══════════════════════════════════════════════════════
+def run_dca(bt_df, dca_amount, dca_days):
+    """
+    bt_df   : 已含指標的回測 DataFrame（含 date, Close 欄）
+    dca_amount : 每次投入金額
+    dca_days   : 每月買入日，如 [5, 15, 25]
+    回傳 result_dca (每日總資產), dca_trades (交易記錄)
+    """
+    shares    = 0.0
+    total_invested = 0.0
+    dca_trades = []
+    result_dca = []
+
+    for _, row in bt_df.iterrows():
+        date  = row['date']
+        close = float(row['Close'])
+        day   = pd.to_datetime(date).day
+
+        # 找最接近目標日的交易日（當月第一個 >= 目標日的交易日）
+        if day in dca_days:
+            buy_sh = dca_amount / close
+            shares += buy_sh
+            total_invested += dca_amount
+            dca_trades.append({
+                '日期': pd.to_datetime(date).strftime('%Y-%m-%d'),
+                '動作': '定期買入',
+                '策略': '定期定額',
+                '價格': round(close, 4),
+                '股數': round(buy_sh, 4),
+                '金額': round(dca_amount, 2),
+                '累計投入': round(total_invested, 2),
+                '持股市值': round(shares * close, 2),
+                '總資產': round(shares * close, 2),
+            })
+
+        result_dca.append({
+            'date':  date,
+            'total': shares * close,
+            'invested': total_invested,
+        })
+
+    return pd.DataFrame(result_dca), pd.DataFrame(dca_trades), total_invested
+
+
+# ══════════════════════════════════════════════════════
 #  Plotly 圖表
 # ══════════════════════════════════════════════════════
-def build_chart(bh_df, st_df, trades_df, bt_df, ticker, ma_short, ma_long, cfg):
-    rows = 3
-    row_heights = [0.5, 0.25, 0.25]
-    subplot_titles = [f"{ticker} 價格走勢", "副指標", "資產對比"]
+def build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
+                bt_df, ticker, ma_short, ma_long, cfg):
 
-    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
-                        row_heights=row_heights,
-                        subplot_titles=subplot_titles,
-                        vertical_spacing=0.06)
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True,
+        row_heights=[0.48, 0.22, 0.30],
+        subplot_titles=[f"{ticker} 價格走勢", "副指標", "資產對比（三策略）"],
+        vertical_spacing=0.06,
+    )
 
     dates = bt_df['date']
 
     # ── 上圖：K線 + MA + BB ──
     fig.add_trace(go.Candlestick(
         x=dates, open=bt_df['Open'], high=bt_df['High'],
-        low=bt_df['Low'],  close=bt_df['Close'],
-        name='K線',
+        low=bt_df['Low'], close=bt_df['Close'], name='K線',
         increasing_line_color='#51cf66', decreasing_line_color='#ff6b6b',
         increasing_fillcolor='#51cf66', decreasing_fillcolor='#ff6b6b',
     ), row=1, col=1)
@@ -208,20 +244,18 @@ def build_chart(bh_df, st_df, trades_df, bt_df, ticker, ma_short, ma_long, cfg):
 
     if cfg['bb']:
         fig.add_trace(go.Scatter(x=dates, y=bt_df['BB_up'], name='BB上軌',
-                                 line=dict(color='#6366f1', width=0.8, dash='dot'),
-                                 showlegend=True), row=1, col=1)
+                                 line=dict(color='#6366f1', width=0.8, dash='dot')), row=1, col=1)
         fig.add_trace(go.Scatter(x=dates, y=bt_df['BB_dn'], name='BB下軌',
                                  line=dict(color='#6366f1', width=0.8, dash='dot'),
-                                 fill='tonexty', fillcolor='rgba(99,102,241,0.05)',
-                                 showlegend=True), row=1, col=1)
+                                 fill='tonexty', fillcolor='rgba(99,102,241,0.05)'), row=1, col=1)
         fig.add_trace(go.Scatter(x=dates, y=bt_df['BB_mid'], name='BB中軌',
-                                 line=dict(color='#6366f1', width=0.8, dash='dot'),
-                                 showlegend=True), row=1, col=1)
+                                 line=dict(color='#6366f1', width=0.8, dash='dot')), row=1, col=1)
 
-    # 買賣標記
+    # 動態策略買賣標記
     if not trades_df.empty:
-        buy_t  = trades_df[trades_df['動作'] == '買回']
-        sell_t = trades_df[trades_df['動作'] != '買回']
+        dyn = trades_df[trades_df['策略'] == '動態買賣']
+        buy_t  = dyn[dyn['動作'] == '買回']
+        sell_t = dyn[dyn['動作'] != '買回']
 
         def get_price(df_t):
             prices = []
@@ -233,17 +267,29 @@ def build_chart(bh_df, st_df, trades_df, bt_df, ticker, ma_short, ma_long, cfg):
         if not buy_t.empty:
             fig.add_trace(go.Scatter(
                 x=pd.to_datetime(buy_t['日期']), y=get_price(buy_t),
-                mode='markers', name='買回',
-                marker=dict(symbol='triangle-up', size=12, color='#51cf66'),
+                mode='markers', name='動態買回',
+                marker=dict(symbol='triangle-up', size=11, color='#51cf66'),
             ), row=1, col=1)
         if not sell_t.empty:
             fig.add_trace(go.Scatter(
                 x=pd.to_datetime(sell_t['日期']), y=get_price(sell_t),
-                mode='markers', name='賣出',
-                marker=dict(symbol='triangle-down', size=12, color='#ff6b6b'),
+                mode='markers', name='動態賣出',
+                marker=dict(symbol='triangle-down', size=11, color='#ff6b6b'),
             ), row=1, col=1)
 
-    # ── 中圖：RSI / KDJ / 成交量 ──
+    # 定期定額買入標記
+    if not dca_trades_df.empty:
+        dca_prices = []
+        for d in pd.to_datetime(dca_trades_df['日期']):
+            r = bt_df[bt_df['date'] == d]
+            dca_prices.append(float(r['Close'].values[0]) if not r.empty else None)
+        fig.add_trace(go.Scatter(
+            x=pd.to_datetime(dca_trades_df['日期']), y=dca_prices,
+            mode='markers', name='定期買入',
+            marker=dict(symbol='circle', size=7, color='#ffd93d', opacity=0.8),
+        ), row=1, col=1)
+
+    # ── 中圖：副指標 ──
     if cfg['rsi']:
         fig.add_trace(go.Scatter(x=dates, y=bt_df['RSI'], name='RSI',
                                  line=dict(color='#00d4aa', width=1.2)), row=2, col=1)
@@ -257,24 +303,29 @@ def build_chart(bh_df, st_df, trades_df, bt_df, ticker, ma_short, ma_long, cfg):
         fig.add_trace(go.Scatter(x=dates, y=bt_df['J'], name='J',
                                  line=dict(color='#6366f1', width=1, opacity=0.7)), row=2, col=1)
     else:
-        vol_colors = ['#51cf66' if float(bt_df['Close'].iloc[i]) >= float(bt_df['Close'].iloc[i-1])
+        vol_colors = ['#51cf66' if i == 0 or float(bt_df['Close'].iloc[i]) >= float(bt_df['Close'].iloc[i-1])
                       else '#ff6b6b' for i in range(len(bt_df))]
         fig.add_trace(go.Bar(x=dates, y=bt_df['Volume'], name='成交量',
-                             marker_color=vol_colors, opacity=0.7), row=2, col=1)
+                             marker_color=vol_colors, opacity=0.6), row=2, col=1)
         fig.add_trace(go.Scatter(x=dates, y=bt_df['Vol_MA'], name='Vol MA20',
                                  line=dict(color='#ffd93d', width=1, dash='dash')), row=2, col=1)
 
-    # ── 下圖：資產對比 ──
+    # ── 下圖：三策略資產對比 ──
     fig.add_trace(go.Scatter(x=bh_df['date'], y=bh_df['total'], name='買入持有',
                              line=dict(color='#00d4aa', width=2)), row=3, col=1)
     fig.add_trace(go.Scatter(x=st_df['date'], y=st_df['total'], name='動態策略',
                              line=dict(color='#6366f1', width=2)), row=3, col=1)
-    fig.add_hline(y=st_df['total'].iloc[0], line_color='#adb5bd',
+    fig.add_trace(go.Scatter(x=dca_df['date'], y=dca_df['total'], name='定期定額',
+                             line=dict(color='#ffd93d', width=2)), row=3, col=1)
+    # 定期定額累計投入線（虛線）
+    fig.add_trace(go.Scatter(x=dca_df['date'], y=dca_df['invested'], name='定額累計投入',
+                             line=dict(color='#ffd93d', width=1, dash='dot'),
+                             opacity=0.5), row=3, col=1)
+    fig.add_hline(y=bh_df['total'].iloc[0], line_color='#adb5bd',
                   line_dash='dot', line_width=1, row=3, col=1)
 
-    # ── 全局樣式 ──
     fig.update_layout(
-        height=780,
+        height=820,
         paper_bgcolor='#0a0e27',
         plot_bgcolor='#1a1f3a',
         font=dict(color='#e9ecef', size=11),
@@ -284,13 +335,11 @@ def build_chart(bh_df, st_df, trades_df, bt_df, ticker, ma_short, ma_long, cfg):
         xaxis_rangeslider_visible=False,
         hovermode='x unified',
     )
-    for i in range(1, rows + 1):
-        fig.update_xaxes(gridcolor='#2d3250', gridwidth=0.5,
-                         showgrid=True, row=i, col=1)
-        fig.update_yaxes(gridcolor='#2d3250', gridwidth=0.5,
-                         showgrid=True, row=i, col=1)
-
+    for i in range(1, 4):
+        fig.update_xaxes(gridcolor='#2d3250', gridwidth=0.5, showgrid=True, row=i, col=1)
+        fig.update_yaxes(gridcolor='#2d3250', gridwidth=0.5, showgrid=True, row=i, col=1)
     fig.update_yaxes(tickprefix='$', row=3, col=1)
+
     return fig
 
 
@@ -299,9 +348,8 @@ def build_chart(bh_df, st_df, trades_df, bt_df, ticker, ma_short, ma_long, cfg):
 # ══════════════════════════════════════════════════════
 st.title("📈 股票回測分析")
 
-# ── 側邊欄：參數設定 ──
 with st.sidebar:
-    st.header("⚙️ 參數設定")
+    st.header("⚙️ 基本參數")
 
     market = st.selectbox("市場", ["美股", "台股上市 (.TW)", "台股上櫃 (.TWO)"])
     raw_ticker = st.text_input("股票代號", value="ONDS").strip().upper()
@@ -317,31 +365,43 @@ with st.sidebar:
 
     st.divider()
     st.subheader("📐 MA 設定")
-    ma_short = st.number_input("短期 MA", value=5,  min_value=1, max_value=200)
-    ma_long  = st.number_input("長期 MA", value=10, min_value=2, max_value=500)
+    ma_short = st.number_input("短期 MA", value=5,  min_value=1,  max_value=200)
+    ma_long  = st.number_input("長期 MA", value=10, min_value=2,  max_value=500)
 
     st.divider()
     st.subheader("🎯 進出場指標")
-    cb_ma  = st.checkbox("MA 交叉",        value=True)
-    cb_bb  = st.checkbox("布林通道中軌",    value=False)
-    cb_rsi = st.checkbox("RSI (30/70)",    value=False)
-    cb_kdj = st.checkbox("KDJ 交叉",       value=False)
-    cb_vol = st.checkbox("放量突破",        value=False)
+    cb_ma  = st.checkbox("MA 交叉",       value=True)
+    cb_bb  = st.checkbox("布林通道中軌",   value=False)
+    cb_rsi = st.checkbox("RSI (30/70)",   value=False)
+    cb_kdj = st.checkbox("KDJ 交叉",      value=False)
+    cb_vol = st.checkbox("放量突破",       value=False)
 
     st.divider()
     st.subheader("🔗 觸發邏輯")
     logic = st.radio("", ["OR（任一指標觸發）", "AND（全部指標同時觸發）"], index=0)
 
+    st.divider()
+    st.subheader("💰 定期定額設定")
+    dca_on     = st.toggle("啟用定期定額", value=True)
+    dca_amount = st.number_input("每次投入金額 (USD)", value=500, step=100, min_value=10)
+    st.caption("選擇每月買入日（可複選）")
+    dca_day5  = st.checkbox("每月 5 日",  value=True)
+    dca_day15 = st.checkbox("每月 15 日", value=False)
+    dca_day25 = st.checkbox("每月 25 日", value=False)
+    dca_days  = [d for d, on in [(5, dca_day5), (15, dca_day15), (25, dca_day25)] if on]
+
+    st.divider()
     run_btn = st.button("▶ 開始回測", use_container_width=True, type="primary")
 
 # ── 主畫面 ──
 if run_btn:
+    # 驗證
     if ma_short >= ma_long:
-        st.error("❌ 短期MA必須小於長期MA")
-        st.stop()
+        st.error("❌ 短期MA必須小於長期MA"); st.stop()
     if not any([cb_ma, cb_bb, cb_rsi, cb_kdj, cb_vol]):
-        st.error("❌ 請至少勾選一個指標")
-        st.stop()
+        st.error("❌ 請至少勾選一個指標"); st.stop()
+    if dca_on and not dca_days:
+        st.error("❌ 定期定額已啟用，請至少選一個買入日"); st.stop()
 
     cfg = {
         'ma': cb_ma, 'bb': cb_bb, 'rsi': cb_rsi,
@@ -356,66 +416,87 @@ if run_btn:
             raw.index = pd.to_datetime(raw.index)
             raw.columns = raw.columns.get_level_values(0)
         except Exception as e:
-            st.error(f"❌ 下載失敗：{e}")
-            st.stop()
+            st.error(f"❌ 下載失敗：{e}"); st.stop()
 
     with st.spinner("回測計算中..."):
         res = run_backtest(raw, str(backtest_start), initial_cash, ma_short, ma_long, cfg)
         bh_df, st_df, trades_df, entry_price, bt_df = res
 
     if bh_df is None:
-        st.error("❌ 回測區間內無資料，請確認日期設定")
-        st.stop()
+        st.error("❌ 回測區間內無資料，請確認日期設定"); st.stop()
+
+    # 定期定額
+    dca_df = pd.DataFrame(st_df[['date']].copy())  # 空的預設
+    dca_trades_df  = pd.DataFrame()
+    dca_invested   = 0.0
+    final_dca      = 0.0
+
+    if dca_on and dca_days:
+        dca_df, dca_trades_df, dca_invested = run_dca(bt_df, dca_amount, dca_days)
+        final_dca = float(dca_df.iloc[-1]['total'])
+    else:
+        dca_df = pd.DataFrame({'date': st_df['date'], 'total': [0]*len(st_df), 'invested': [0]*len(st_df)})
 
     final_bh = bh_df.iloc[-1]['total']
     final_st = st_df.iloc[-1]['total']
     ret_bh   = (final_bh - initial_cash) / initial_cash * 100
     ret_st   = (final_st - initial_cash) / initial_cash * 100
+    ret_dca  = (final_dca - dca_invested) / dca_invested * 100 if dca_invested > 0 else 0
     n_trades = len(trades_df) if not trades_df.empty else 0
+    n_dca    = len(dca_trades_df) if not dca_trades_df.empty else 0
 
     # ── 摘要卡片 ──
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        st.metric("進場價格", f"${entry_price:.4f}",
-                  f"{ticker} · MA{ma_short}/MA{ma_long}")
+        st.metric("進場價格", f"${entry_price:.4f}", f"{ticker}")
     with c2:
-        st.metric("策略一（買入持有）", f"${final_bh:,.2f}",
-                  f"{ret_bh:+.2f}%",
-                  delta_color="normal")
+        st.metric("策略一 買入持有", f"${final_bh:,.2f}", f"{ret_bh:+.2f}%")
     with c3:
-        st.metric("策略二（動態買賣）", f"${final_st:,.2f}",
-                  f"{ret_st:+.2f}%",
-                  delta_color="normal")
+        st.metric("策略二 動態買賣", f"${final_st:,.2f}", f"{ret_st:+.2f}%")
     with c4:
+        days_str = "+".join([f"{d}日" for d in dca_days]) if dca_days else "—"
+        st.metric("策略三 定期定額", f"${final_dca:,.2f}",
+                  f"{ret_dca:+.2f}%  |  投入${dca_invested:,.0f}")
+    with c5:
         active = [k.upper() for k, v in cfg.items() if v and k != 'logic']
-        st.metric("交易次數", str(n_trades),
-                  f"{', '.join(active)} | {cfg['logic']}")
+        st.metric("交易次數", f"{n_trades} + {n_dca}",
+                  f"動態{n_trades}筆 / 定額{n_dca}筆")
 
     st.divider()
 
-    # ── 圖表 ──
-    tab1, tab2 = st.tabs(["📊 走勢圖", f"📋 交易記錄（{n_trades} 筆）"])
+    # ── 圖表 + 交易記錄 ──
+    tab1, tab2, tab3 = st.tabs(["📊 走勢圖", f"📋 動態策略記錄（{n_trades}筆）",
+                                  f"💰 定期定額記錄（{n_dca}筆）"])
 
     with tab1:
-        fig = build_chart(bh_df, st_df, trades_df, bt_df,
-                          ticker, ma_short, ma_long, cfg)
+        fig = build_chart(bh_df, st_df, dca_df, trades_df, dca_trades_df,
+                          bt_df, ticker, ma_short, ma_long, cfg)
         st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
         if trades_df.empty:
-            st.warning("⚠️ 回測期間內未觸發任何交易")
+            st.warning("⚠️ 回測期間內未觸發任何動態策略交易")
         else:
-            def style_table(row):
-                if '買回' in str(row['動作']):
-                    return ['color: #51cf66'] * len(row)
-                else:
-                    return ['color: #ff6b6b'] * len(row)
+            def style_dyn(row):
+                color = '#51cf66' if '買回' in str(row['動作']) else '#ff6b6b'
+                return [f'color: {color}'] * len(row)
+            st.dataframe(trades_df.style.apply(style_dyn, axis=1),
+                         use_container_width=True, hide_index=True)
 
-            st.dataframe(
-                trades_df.style.apply(style_table, axis=1),
-                use_container_width=True,
-                hide_index=True,
-            )
+    with tab3:
+        if dca_trades_df.empty:
+            st.warning("⚠️ 定期定額未啟用或無交易")
+        else:
+            st.dataframe(dca_trades_df.style.apply(
+                lambda _: ['color: #ffd93d'] * len(dca_trades_df.columns), axis=1),
+                use_container_width=True, hide_index=True)
+
+            # 定期定額統計小結
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric("總投入", f"${dca_invested:,.2f}")
+            sc2.metric("現值",   f"${final_dca:,.2f}")
+            sc3.metric("報酬率", f"{ret_dca:+.2f}%",
+                       f"每月{days_str}各投入${dca_amount:,.0f}")
 
 else:
     st.info("👈 請在左側設定參數後，點擊「開始回測」")
